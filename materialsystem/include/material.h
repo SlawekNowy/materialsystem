@@ -25,7 +25,7 @@ class MaterialManager;
 class MaterialHandle;
 class VFilePtrInternalReal;
 namespace ds {class Block;};
-namespace udm {struct AssetData;};
+namespace udm {struct AssetData; struct Element; struct PropertyWrapper; struct LinkedPropertyWrapper;};
 #pragma warning(push)
 #pragma warning(disable : 4251)
 class DLLMATSYS Material
@@ -111,7 +111,15 @@ public:
 	void SetBloomColorFactor(const Vector4 &bloomColorFactor);
 	std::optional<Vector4> GetBloomColorFactor() const;
 
-	const std::shared_ptr<ds::Block> &GetDataBlock() const;
+	udm::Element &GetData();
+	const udm::Element &GetData() const {return const_cast<Material*>(this)->GetData();}
+
+	udm::LinkedPropertyWrapper &GetPropertyData();
+	const udm::LinkedPropertyWrapper &GetPropertyData() const;
+	udm::LinkedPropertyWrapper &GetTextureData();
+	const udm::LinkedPropertyWrapper &GetTextureData() const;
+
+	void SetData(udm::Element &data);
 	virtual void SetLoaded(bool b);
 	CallbackHandle CallOnLoaded(const std::function<void(void)> &f) const;
 	bool IsValid() const;
@@ -121,10 +129,6 @@ public:
 	bool Save(udm::AssetData outData,std::string &outErr);
 	bool Save(const std::string &fileName,std::string &outErr,bool absolutePath=false);
 	bool Save(std::string &outErr);
-
-	bool SaveLegacy(std::shared_ptr<VFilePtrInternalReal> f) const;
-	bool SaveLegacy(const std::string &fileName,const std::string &rootPath="") const;
-	bool SaveLegacy() const;
 
 	MaterialIndex GetIndex() const {return m_index;}
 
@@ -144,8 +148,9 @@ protected:
 	MaterialHandle m_handle;
 	util::WeakHandle<util::ShaderInfo> m_shaderInfo = {};
 	std::unique_ptr<std::string> m_shader;
+	std::unordered_map<std::string,TextureInfo> m_texInfos;
 	std::string m_name;
-	std::shared_ptr<ds::Block> m_data;
+	std::shared_ptr<udm::Element> m_data;
 	StateFlags m_stateFlags = StateFlags::None;
 	mutable std::vector<CallbackHandle> m_callOnLoaded;
 	MaterialManager &m_manager;

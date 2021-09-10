@@ -47,8 +47,8 @@ public:
 	MaterialManager(const MaterialManager&)=delete;
 	virtual ~MaterialManager();
 
-	Material *CreateMaterial(const std::string &identifier,const std::string &shader,const std::shared_ptr<ds::Block> &root=nullptr);
-	Material *CreateMaterial(const std::string &shader,const std::shared_ptr<ds::Block> &root=nullptr);
+	Material *CreateMaterial(const std::string &identifier,const std::string &shader,udm::PropertyWrapper *data=nullptr);
+	Material *CreateMaterial(const std::string &shader,udm::PropertyWrapper *data=nullptr);
 	Material *FindMaterial(const std::string &identifier,std::string &internalMatId) const;
 	Material *FindMaterial(const std::string &identifier) const;
 	Material *GetMaterial(MaterialIndex index);

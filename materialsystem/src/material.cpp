@@ -92,8 +92,58 @@ void Material::SetUserData(void *data) {m_userData = data;}
 
 bool Material::IsTranslucent() const {return m_alphaMode == AlphaMode::Blend;}
 
+static bool read_image_size(std::string &imgFile,uint32_t &width,uint32_t &height)
+{
+	TextureType type;
+	imgFile = translate_image_path(imgFile,type);
+	auto r = uimg::read_image_size(imgFile,width,height);
+	auto rootPath = MaterialManager::GetRootMaterialLocation() +"/";
+	imgFile = imgFile.substr(rootPath.length());
+	return r;
+}
+
+static TextureInfo get_texture_info(const std::string &value)
+{
+	auto str = value;
+	if(str.empty())
+	{
+		m_value.texture = nullptr;
+		m_value.width = 0;
+		m_value.height = 0;
+		return;
+	}
+	uint32_t width;
+	uint32_t height;
+	if(read_image_size(str,width,height) == true)
+	{
+		m_value.texture = NULL;
+		m_value.width = width;
+		m_value.height = height;
+	}
+	else
+	{
+		m_value.texture = NULL;
+		m_value.width = 0;
+		m_value.height = 0;
+	}
+	m_value.name = str;
+}
 void Material::UpdateTextures()
 {
+	auto texInfos = std::move(m_texInfos);
+	m_texInfos.clear();
+	auto &texData = GetTextureData();
+	for(auto it=texData.begin<udm::String>();it!=texData.end<udm::String>();++it)
+	{
+		auto &texName = *it;
+		auto itInfo = texInfos.find(texName);
+		if(itInfo != texInfos.end())
+		{
+			m_texInfos[texName] = std::move(itInfo->second);
+			continue;
+		}
+		m_texInfos[texName] = get_texture_info(texName);
+	}
 	m_texDiffuse = GetTextureInfo(DIFFUSE_MAP_IDENTIFIER);
 	if(!m_texDiffuse)
 		m_texDiffuse = GetTextureInfo(ALBEDO_MAP_IDENTIFIER);
@@ -104,8 +154,8 @@ void Material::UpdateTextures()
 	m_texAlpha = GetTextureInfo(ALPHA_MAP_IDENTIFIER);
 	m_texRma = GetTextureInfo(RMA_MAP_IDENTIFIER);
 
-	auto &data = GetDataBlock();
-	m_alphaMode = static_cast<AlphaMode>(data->GetInt("alpha_mode",umath::to_integral(AlphaMode::Opaque)));
+	auto &data = GetPropertyData();
+	data["alpha_mode"](m_alphaMode);
 }
 
 void Material::SetShaderInfo(const util::WeakHandle<util::ShaderInfo> &shaderInfo)
@@ -148,74 +198,10 @@ void Material::SetLoaded(bool b)
 bool Material::Save(udm::AssetData outData,std::string &outErr)
 {
 	auto udm = (*outData)[GetShaderIdentifier()];
-	std::function<void(udm::LinkedPropertyWrapper,ds::Block&)> dataBlockToUdm = nullptr;
-	dataBlockToUdm = [&dataBlockToUdm,&udm](udm::LinkedPropertyWrapper prop,ds::Block &block) {
-		for(auto &pair : *block.GetData())
-		{
-			auto &key = pair.first;
-			auto &val = pair.second;
-			if(val->IsBlock())
-			{
-				auto &block = static_cast<ds::Block&>(*pair.second);
-				dataBlockToUdm(prop[key],block);
-				continue;
-			}
-			if(val->IsContainer())
-			{
-				auto &container = static_cast<ds::Container&>(*pair.second);
-				auto &children = container.GetBlocks();
-				auto udmChildren = prop.AddArray(key,children.size());
-				uint32_t idx = 0;
-				for(auto &child : children)
-				{
-					if(child->IsContainer() || child->IsBlock())
-						continue;
-					auto *dsValue = dynamic_cast<ds::Value*>(pair.second.get());
-					if(dsValue == nullptr)
-						continue;
-					udmChildren[idx++] = dsValue->GetString();
-				}
-				udmChildren.Resize(idx);
-				continue;
-			}
-			auto *dsValue = dynamic_cast<ds::Value*>(val.get());
-			assert(dsValue);
-			if(dsValue)
-			{
-				auto *dsStr = dynamic_cast<ds::String*>(dsValue);
-				if(dsStr)
-					prop[key] = dsStr->GetString();
-				auto *dsInt = dynamic_cast<ds::Int*>(dsValue);
-				if(dsInt)
-					prop[key] = dsInt->GetInt();
-				auto *dsFloat = dynamic_cast<ds::Float*>(dsValue);
-				if(dsFloat)
-					prop[key] = dsFloat->GetFloat();
-				auto *dsBool = dynamic_cast<ds::Bool*>(dsValue);
-				if(dsBool)
-					prop[key] = dsBool->GetBool();
-				auto *dsVec = dynamic_cast<ds::Vector*>(dsValue);
-				if(dsVec)
-					prop[key] = dsVec->GetVector();
-				auto *dsVec4 = dynamic_cast<ds::Vector4*>(dsValue);
-				if(dsVec4)
-					prop[key] = dsVec4->GetVector4();
-				auto *dsVec2 = dynamic_cast<ds::Vector2*>(dsValue);
-				if(dsVec2)
-					prop[key] = dsVec2->GetVector2();
-				auto *dsTex = dynamic_cast<ds::Texture*>(dsValue);
-				if(dsTex)
-					udm["textures"][key] = dsTex->GetString();
-				auto *dsCol = dynamic_cast<ds::Color*>(dsValue);
-				if(dsCol)
-					prop[key] = dsCol->GetColor().ToVector4();
-			}
-		}
-	};
-
 	outData.SetAssetType(PMAT_IDENTIFIER);
 	outData.SetAssetVersion(PMAT_VERSION);
-	dataBlockToUdm(udm["properties"],*m_data);
+	udm["properties"] = GetData()["properties"];
+	udm["textures"] = GetData()["textures"];
 	return true;
 }
 extern const std::array<std::string,5> g_knownMaterialFormats;
@@ -264,15 +250,6 @@ bool Material::Save(std::string &outErr)
 	}
 	return Save(absFileName,outErr,absolutePath);
 }
-bool Material::SaveLegacy(std::shared_ptr<VFilePtrInternalReal> f) const
-{
-	auto &rootData = GetDataBlock();
-	std::stringstream ss;
-	ss<<rootData->ToString(GetShaderIdentifier());
-
-	f->WriteString(ss.str());
-	return true;
-}
 std::optional<std::string> Material::GetAbsolutePath() const
 {
 	auto name = const_cast<Material*>(this)->GetName();
@@ -285,40 +262,6 @@ std::optional<std::string> Material::GetAbsolutePath() const
 	if(FileManager::FindLocalPath(absPath,absPath) == false)
 		return {};
 	return absPath;
-}
-bool Material::SaveLegacy() const
-{
-	auto name = const_cast<Material*>(this)->GetName();
-	if(name.empty())
-		return false;
-	std::string absPath = GetManager().GetRootMaterialLocation() +"\\";
-	absPath += name;
-	ufile::remove_extension_from_filename(absPath,g_knownMaterialFormats);
-	absPath += ".wmi";
-	if(FileManager::FindLocalPath(absPath,absPath) == false)
-		absPath = "addons/converted/" +absPath;
-
-	auto f = FileManager::OpenFile<VFilePtrReal>(absPath.c_str(),"w");
-	if(f == nullptr)
-		return false;
-	return SaveLegacy(f);
-}
-bool Material::SaveLegacy(const std::string &fileName,const std::string &inRootPath) const
-{
-	auto rootPath = inRootPath;
-	if(rootPath.empty() == false && rootPath.back() != '/' && rootPath.back() != '\\')
-		rootPath += '/';
-	auto fullPath = rootPath +MaterialManager::GetRootMaterialLocation() +"/" +fileName;
-	ufile::remove_extension_from_filename(fullPath,g_knownMaterialFormats);
-	fullPath += ".wmi";
-
-	auto pathWithoutFileName = ufile::get_path_from_filename(fullPath);
-	FileManager::CreatePath(pathWithoutFileName.c_str());
-
-	auto f = FileManager::OpenFile<VFilePtrReal>(fullPath.c_str(),"w");
-	if(f == nullptr)
-		return false;
-	return SaveLegacy(f);
 }
 CallbackHandle Material::CallOnLoaded(const std::function<void(void)> &f) const
 {
@@ -356,35 +299,25 @@ TextureInfo *Material::GetRMAMap() {return m_texRma;}
 AlphaMode Material::GetAlphaMode() const {return m_alphaMode;}
 float Material::GetAlphaCutoff() const
 {
-	auto &data = GetDataBlock();
-	return data->GetFloat("alpha_cutoff",0.5f);
+	auto alphaCutoff = 0.5f;
+	const_cast<Material*>(this)->GetPropertyData()["alpha_cutoff"](alphaCutoff);
+	return alphaCutoff;
 }
 
-void Material::SetColorFactor(const Vector4 &colorFactor)
-{
-	auto &data = GetDataBlock();
-	data->AddValue("vector4","color_factor",std::to_string(colorFactor.r) +' ' +std::to_string(colorFactor.g) +' ' +std::to_string(colorFactor.b) +' ' +std::to_string(colorFactor.a));
-}
+void Material::SetColorFactor(const Vector4 &colorFactor) {GetPropertyData()["color_factor"] = colorFactor;}
 Vector4 Material::GetColorFactor() const
 {
-	auto &data = GetDataBlock();
-	auto colFactor = data->GetValue("color_factor");
-	if(colFactor == nullptr || typeid(*colFactor) != typeid(ds::Vector4))
-		return {1.f,1.f,1.f,1.f};
-	return static_cast<ds::Vector4&>(*colFactor).GetValue();
+	Vector4 colorFactor {1.f,1.f,1.f,1.f};
+	const_cast<Material*>(this)->GetPropertyData()["color_factor"](colorFactor);
+	return colorFactor;
 }
-void Material::SetBloomColorFactor(const Vector4 &bloomColorFactor)
-{
-	auto &data = GetDataBlock();
-	data->AddValue("vector4","bloom_color_factor",std::to_string(bloomColorFactor.r) +' ' +std::to_string(bloomColorFactor.g) +' ' +std::to_string(bloomColorFactor.b) +' ' +std::to_string(bloomColorFactor.a));
-}
+void Material::SetBloomColorFactor(const Vector4 &bloomColorFactor) {GetPropertyData()["bloom_color_factor"] = bloomColorFactor;}
 std::optional<Vector4> Material::GetBloomColorFactor() const
 {
-	auto &data = GetDataBlock();
-	auto colFactor = data->GetValue("bloom_color_factor");
-	if(colFactor == nullptr || typeid(*colFactor) != typeid(ds::Vector4))
+	Vector4 bloomColorFactor;
+	if(!const_cast<Material*>(this)->GetPropertyData()["bloom_color_factor"](bloomColorFactor))
 		return {};
-	return static_cast<ds::Vector4&>(*colFactor).GetValue();
+	return bloomColorFactor;
 }
 
 void Material::SetName(const std::string &name) {m_name = name;}
@@ -406,22 +339,13 @@ const TextureInfo *Material::GetTextureInfo(const std::string &key) const {retur
 
 TextureInfo *Material::GetTextureInfo(const std::string &key)
 {
-	auto &base = m_data->GetValue(key);
-	if(base == nullptr || base->IsBlock())
+	auto it = m_texInfos.find(key);
+	if(it == m_texInfos.end())
 		return nullptr;
-	auto &val = static_cast<ds::Value&>(*base);
-	auto &type = typeid(val);
-	if(type != typeid(ds::Texture))
-		return nullptr;
-	auto &datTex = static_cast<ds::Texture&>(val);
-	return &const_cast<TextureInfo&>(datTex.GetValue());
+	return &it->second;
 }
 
-const std::shared_ptr<ds::Block> &Material::GetDataBlock() const
-{
-	static std::shared_ptr<ds::Block> nptr = nullptr;
-	return (m_data != nullptr) ? m_data : nptr;
-}
+udm::Element &Material::GetData() {return *m_data;}
 
 std::ostream &operator<<(std::ostream &out,const Material &o)
 {
